@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.db
+.scannerwork/
+dependency-check-report.*
+reports/
+.venv/

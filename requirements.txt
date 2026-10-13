@@ -1,0 +1,9 @@
+Flask==0.12.2
+Jinja2==2.10
+Werkzeug==0.14.1
+MarkupSafe==1.0
+itsdangerous==0.24
+click==6.7
+PyYAML==5.1
+requests==2.19.1
+urllib3==1.24.1
