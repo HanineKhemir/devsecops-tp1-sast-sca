@@ -5,3 +5,4 @@ __pycache__/
 dependency-check-report.*
 reports/
 .venv/
+reports/.sonar_token
