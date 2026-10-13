@@ -1,26 +1,27 @@
-import hashlib
 import os
+import re
+import tempfile
 
 import requests
 import yaml
-from flask import Flask, redirect, render_template, render_template_string, request, session, url_for
+from flask import Flask, redirect, render_template, request, session, url_for
 
-from vulnbank.db import DB_PATH, get_connection, init_db
+from vulnbank.db import get_connection, init_db
+from vulnbank.security import hash_password, verify_password
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "s3cr3t-dev-key-do-not-change-9f2b1a"
+# FIX (secret): read from the environment instead of hardcoding it in source.
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or os.urandom(24).hex()
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yml")
 RATES_URL = "https://api.exchangerate.host/latest?base=TND"
+ACCOUNT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def load_config():
     with open(CONFIG_PATH) as handle:
-        return yaml.load(handle.read())
-
-
-def hash_password(password):
-    return hashlib.md5(password.encode()).hexdigest()
+        # FIX (yaml): safe_load cannot instantiate arbitrary Python objects.
+        return yaml.safe_load(handle.read())
 
 
 @app.route("/")
@@ -34,17 +35,17 @@ def login():
         return render_template("index.html", user=session.get("username"))
 
     username = request.form.get("username", "")
-    password = hash_password(request.form.get("password", ""))
+    password = request.form.get("password", "")
 
     conn = get_connection()
-    query = (
-        "SELECT id, username, role FROM users "
-        f"WHERE username = '{username}' AND password = '{password}'"
-    )
-    row = conn.execute(query).fetchone()
+    # FIX (SQLi): parameterized query — the value never becomes SQL syntax.
+    row = conn.execute(
+        "SELECT id, username, role, password FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
     conn.close()
 
-    if row is None:
+    if row is None or not verify_password(row["password"], password):
         return render_template("index.html", error="Identifiants invalides"), 401
 
     session["username"] = row["username"]
@@ -62,8 +63,10 @@ def logout():
 def accounts():
     owner = request.args.get("owner", "")
     conn = get_connection()
+    # FIX (SQLi): the LIKE pattern is passed as a bound parameter.
     rows = conn.execute(
-        "SELECT owner, iban, balance FROM accounts WHERE owner LIKE '%" + owner + "%'"
+        "SELECT owner, iban, balance FROM accounts WHERE owner LIKE ?",
+        (f"%{owner}%",),
     ).fetchall()
     conn.close()
     return render_template("index.html", accounts=rows, user=session.get("username"))
@@ -72,29 +75,37 @@ def accounts():
 @app.route("/comment", methods=["POST"])
 def comment():
     message = request.form.get("message", "")
-    page = f"""
-    <html><body>
-      <h2>Merci pour votre retour</h2>
-      <div class="note">{message}</div>
-      <a href="/">Retour</a>
-    </body></html>
-    """
-    return render_template_string(page)
+    # FIX (XSS): render through a template so Jinja2 auto-escapes the input.
+    return render_template("comment.html", message=message)
 
 
 @app.route("/export")
 def export():
     account = request.args.get("account", "all")
-    os.system(f"sqlite3 {DB_PATH} '.dump accounts' > /tmp/vulnbank_export_{account}.sql")
+    # FIX (command injection): validate input and dump via the DB API — no shell.
+    if not ACCOUNT_NAME.match(account):
+        return "Nom de compte invalide", 400
+    export_path = os.path.join(
+        tempfile.gettempdir(), f"vulnbank_export_{account}.sql"
+    )
+    conn = get_connection()
+    with open(export_path, "w") as handle:
+        for line in conn.iterdump():
+            handle.write(line + "\n")
+    conn.close()
     return f"Export de {account} termine", 200
 
 
 @app.route("/rates")
 def rates():
-    response = requests.get(RATES_URL, verify=False, timeout=10)
+    # FIX (TLS): certificate validation stays enabled (default verify=True).
+    response = requests.get(RATES_URL, timeout=10)
     return response.json()
 
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # FIX (debug/bind): both come from the environment; safe defaults for local.
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=5000, debug=debug)
