@@ -2,7 +2,12 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 def hash_password(password):
-    # pbkdf2:sha256 with per-user salt, replaces the previous insecure MD5.
+    # AVANT (vulnerable) :  return hashlib.md5(password.encode()).hexdigest()
+    # POURQUOI FAUX : MD5 est un algorithme casse et tres rapide a calculer.
+    #   Sans sel, deux utilisateurs avec le meme mot de passe ont la meme
+    #   empreinte, et une attaque par dictionnaire casse les hash en secondes.
+    # CORRECTION : generate_password_hash() utilise pbkdf2:sha256, lent et avec
+    #   un sel unique par utilisateur -> resistant aux attaques par force brute.
     return generate_password_hash(password)
 
 

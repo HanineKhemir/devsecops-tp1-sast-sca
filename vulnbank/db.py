@@ -34,6 +34,12 @@ def init_db():
         );
         """
     )
+    # AVANT (vulnerable) : les mots de passe etaient stockes en MD5 ecrits en dur
+    #   ("alice", "5f4dcc3b5aa765d61d8327deb882cf99", ...) = md5("password").
+    # POURQUOI FAUX : empreintes MD5 non salees, cassables instantanement via des
+    #   bases de hash publiques (rainbow tables).
+    # CORRECTION : on hache les mots de passe au demarrage avec hash_password()
+    #   (pbkdf2 + sel). Voir vulnbank/security.py.
     seed = [
         ("alice", hash_password("password"), "client"),
         ("bob", hash_password("123456"), "client"),

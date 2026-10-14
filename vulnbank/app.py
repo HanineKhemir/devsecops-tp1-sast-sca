@@ -10,7 +10,11 @@ from vulnbank.db import get_connection, init_db
 from vulnbank.security import hash_password, verify_password
 
 app = Flask(__name__)
-# FIX (secret): read from the environment instead of hardcoding it in source.
+# AVANT (vulnerable) :  app.config["SECRET_KEY"] = "s3cr3t-dev-key-..."
+# POURQUOI FAUX : un secret ecrit en dur est visible par tous dans le code
+#   source (et sur GitHub). Il sert a signer les cookies de session : s'il
+#   fuit, un attaquant peut forger des sessions et usurper un utilisateur.
+# CORRECTION : on le lit depuis une variable d'environnement.
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or os.urandom(24).hex()
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yml")
@@ -20,7 +24,11 @@ ACCOUNT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 def load_config():
     with open(CONFIG_PATH) as handle:
-        # FIX (yaml): safe_load cannot instantiate arbitrary Python objects.
+        # AVANT (vulnerable) :  return yaml.load(handle.read())
+        # POURQUOI FAUX : yaml.load() peut instancier des objets Python
+        #   arbitraires. Un fichier YAML piege peut donc executer du code
+        #   (RCE) au moment du chargement.
+        # CORRECTION : safe_load() ne cree que des types de base (dict, list...).
         return yaml.safe_load(handle.read())
 
 
@@ -38,7 +46,14 @@ def login():
     password = request.form.get("password", "")
 
     conn = get_connection()
-    # FIX (SQLi): parameterized query — the value never becomes SQL syntax.
+    # AVANT (vulnerable) :
+    #   query = f"SELECT ... WHERE username = '{username}' AND password = '{password}'"
+    #   row = conn.execute(query).fetchone()
+    # POURQUOI FAUX : la saisie est collee directement dans la requete SQL.
+    #   En tapant   admin' --   l'apostrophe ferme la chaine et "--" met la
+    #   verification du mot de passe en commentaire -> connexion sans mot de passe.
+    # CORRECTION : requete PARAMETREE. Le "?" est une valeur liee : la saisie
+    #   est traitee comme une donnee, jamais comme du code SQL.
     row = conn.execute(
         "SELECT id, username, role, password FROM users WHERE username = ?",
         (username,),
@@ -63,7 +78,12 @@ def logout():
 def accounts():
     owner = request.args.get("owner", "")
     conn = get_connection()
-    # FIX (SQLi): the LIKE pattern is passed as a bound parameter.
+    # AVANT (vulnerable) :
+    #   "SELECT ... WHERE owner LIKE '%" + owner + "%'"
+    # POURQUOI FAUX : encore une concatenation. En tapant   ' OR '1'='1
+    #   la condition devient toujours vraie -> tous les comptes de tous les
+    #   clients sont affiches (fuite de donnees).
+    # CORRECTION : le motif de recherche est passe comme parametre lie ("?").
     rows = conn.execute(
         "SELECT owner, iban, balance FROM accounts WHERE owner LIKE ?",
         (f"%{owner}%",),
@@ -75,14 +95,27 @@ def accounts():
 @app.route("/comment", methods=["POST"])
 def comment():
     message = request.form.get("message", "")
-    # FIX (XSS): render through a template so Jinja2 auto-escapes the input.
+    # AVANT (vulnerable) :
+    #   page = f"<div>{message}</div>"
+    #   return render_template_string(page)
+    # POURQUOI FAUX : le message de l'utilisateur est injecte brut dans la page.
+    #   En tapant   <img src=x onerror="alert(1)">   le JavaScript s'execute
+    #   dans le navigateur de la victime (faille XSS).
+    # CORRECTION : on passe par un template. Jinja2 echappe automatiquement le
+    #   contenu : les balises s'affichent comme du texte, elles ne s'executent pas.
     return render_template("comment.html", message=message)
 
 
 @app.route("/export")
 def export():
     account = request.args.get("account", "all")
-    # FIX (command injection): validate input and dump via the DB API — no shell.
+    # AVANT (vulnerable) :
+    #   os.system(f"sqlite3 {DB_PATH} '.dump' > /tmp/export_{account}.sql")
+    # POURQUOI FAUX : la saisie passe dans une commande shell. En tapant
+    #   account=x; rm -rf /   l'attaquant execute ses propres commandes sur le
+    #   serveur (injection de commande).
+    # CORRECTION : (1) on valide le nom avec une liste blanche (regex), (2) on
+    #   n'utilise plus le shell : l'export se fait via l'API SQLite (iterdump()).
     if not ACCOUNT_NAME.match(account):
         return "Nom de compte invalide", 400
     export_path = os.path.join(
@@ -98,14 +131,23 @@ def export():
 
 @app.route("/rates")
 def rates():
-    # FIX (TLS): certificate validation stays enabled (default verify=True).
+    # AVANT (vulnerable) :  requests.get(RATES_URL, verify=False, ...)
+    # POURQUOI FAUX : verify=False desactive la verification du certificat TLS.
+    #   On ne sait plus si on parle au vrai serveur -> attaque "man-in-the-middle"
+    #   possible (interception/modification des echanges).
+    # CORRECTION : on garde la verification du certificat (verify=True par defaut).
     response = requests.get(RATES_URL, timeout=10)
     return response.json()
 
 
 if __name__ == "__main__":
     init_db()
-    # FIX (debug/bind): both come from the environment; safe defaults for local.
+    # AVANT (vulnerable) :  app.run(host="0.0.0.0", port=5000, debug=True)
+    # POURQUOI FAUX : debug=True expose la console interactive Werkzeug en cas
+    #   d'erreur -> un attaquant peut y executer du code Python. "0.0.0.0" en dur
+    #   expose aussi l'app sur toutes les interfaces reseau.
+    # CORRECTION : debug et host viennent de variables d'environnement, avec des
+    #   valeurs sures par defaut (debug off, ecoute locale 127.0.0.1).
     host = os.environ.get("HOST", "127.0.0.1")
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(host=host, port=5000, debug=debug)
