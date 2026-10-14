@@ -10,6 +10,7 @@ from vulnbank.db import get_connection, init_db
 from vulnbank.security import hash_password, verify_password
 
 app = Flask(__name__)
+# FAILLE : Secret ecrit en dur   |   DETECTE PAR : Bandit (regle B105)
 # AVANT (vulnerable) :  app.config["SECRET_KEY"] = "s3cr3t-dev-key-..."
 # POURQUOI FAUX : un secret ecrit en dur est visible par tous dans le code
 #   source (et sur GitHub). Il sert a signer les cookies de session : s'il
@@ -24,7 +25,8 @@ ACCOUNT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 def load_config():
     with open(CONFIG_PATH) as handle:
-        # AVANT (vulnerable) :  return yaml.load(handle.read())
+        # FAILLE : Chargement YAML non securise   |   DETECTE PAR : Bandit (regle B506)
+# AVANT (vulnerable) :  return yaml.load(handle.read())
         # POURQUOI FAUX : yaml.load() peut instancier des objets Python
         #   arbitraires. Un fichier YAML piege peut donc executer du code
         #   (RCE) au moment du chargement.
@@ -46,6 +48,7 @@ def login():
     password = request.form.get("password", "")
 
     conn = get_connection()
+    # FAILLE : Injection SQL   |   DETECTE PAR : Bandit (regle B608)
     # AVANT (vulnerable) :
     #   query = f"SELECT ... WHERE username = '{username}' AND password = '{password}'"
     #   row = conn.execute(query).fetchone()
@@ -78,6 +81,7 @@ def logout():
 def accounts():
     owner = request.args.get("owner", "")
     conn = get_connection()
+    # FAILLE : Injection SQL   |   DETECTE PAR : Bandit (regle B608)
     # AVANT (vulnerable) :
     #   "SELECT ... WHERE owner LIKE '%" + owner + "%'"
     # POURQUOI FAUX : encore une concatenation. En tapant   ' OR '1'='1
@@ -95,6 +99,10 @@ def accounts():
 @app.route("/comment", methods=["POST"])
 def comment():
     message = request.form.get("message", "")
+    # FAILLE : XSS (Cross-Site Scripting)   |   DETECTE PAR : aucun scanner
+    #   automatique -> identifiee a la main (revue de code). Montre les limites
+    #   des scanners : SonarQube Community (pas d'analyse de flux) et Bandit ne
+    #   signalent pas render_template_string.
     # AVANT (vulnerable) :
     #   page = f"<div>{message}</div>"
     #   return render_template_string(page)
@@ -109,6 +117,7 @@ def comment():
 @app.route("/export")
 def export():
     account = request.args.get("account", "all")
+    # FAILLE : Injection de commande   |   DETECTE PAR : Bandit (regle B605)
     # AVANT (vulnerable) :
     #   os.system(f"sqlite3 {DB_PATH} '.dump' > /tmp/export_{account}.sql")
     # POURQUOI FAUX : la saisie passe dans une commande shell. En tapant
@@ -131,6 +140,8 @@ def export():
 
 @app.route("/rates")
 def rates():
+    # FAILLE : Certificat TLS non verifie   |   DETECTE PAR : Bandit (B501) +
+    #   SonarQube (vulnerabilite python:S4830)
     # AVANT (vulnerable) :  requests.get(RATES_URL, verify=False, ...)
     # POURQUOI FAUX : verify=False desactive la verification du certificat TLS.
     #   On ne sait plus si on parle au vrai serveur -> attaque "man-in-the-middle"
@@ -142,6 +153,8 @@ def rates():
 
 if __name__ == "__main__":
     init_db()
+    # FAILLE : Mode debug actif (B201) + ecoute sur toutes les interfaces (B104)
+    #   DETECTE PAR : Bandit (regles B201 et B104)
     # AVANT (vulnerable) :  app.run(host="0.0.0.0", port=5000, debug=True)
     # POURQUOI FAUX : debug=True expose la console interactive Werkzeug en cas
     #   d'erreur -> un attaquant peut y executer du code Python. "0.0.0.0" en dur

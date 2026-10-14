@@ -34,6 +34,7 @@ def init_db():
         );
         """
     )
+    # FAILLE : Mots de passe hachés en MD5   |   DETECTE PAR : Bandit (B324)
     # AVANT (vulnerable) : les mots de passe etaient stockes en MD5 ecrits en dur
     #   ("alice", "5f4dcc3b5aa765d61d8327deb882cf99", ...) = md5("password").
     # POURQUOI FAUX : empreintes MD5 non salees, cassables instantanement via des
